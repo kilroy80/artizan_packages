@@ -30,11 +30,10 @@ class ZtoDtosGenerator extends GeneratorForAnnotation<ZtoDtos> {
       final classElem = type.element;
       if (classElem is! ClassElement) continue;
 
-      final schemaCode =
-          generateSchemaForClass(classElem, includeRegistration: false);
+      final schemaCode = generateSchemaForClass(classElem, includeRegistration: false);
       schemas.add(schemaCode);
 
-      final className = classElem.name;
+      final className = classElem.displayName;
       final schemaName = '\$${className}Schema';
       registrations.add(_DtoReg(className: className, schemaName: schemaName));
     }

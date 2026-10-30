@@ -11,17 +11,17 @@ import 'zto_dtos_generator.dart';
 import 'zto_generate_schemas_generator.dart';
 
 /// Factory function registered in `build.yaml`.
-Builder ztoBuilder(BuilderOptions options) => PartBuilder(
-      [
-        const DtoGenerator(),
-        const ZDtoGenerator(),
-        const ZEntityGenerator(),
-        const ZModelGenerator(),
-        const ZtoDtosGenerator(),
-        const ZtoGenerateSchemasGenerator(),
-      ],
-      '.g.dart',
-    );
+Builder ztoBuilder(BuilderOptions options) => SharedPartBuilder(
+  [
+    const DtoGenerator(),
+    const ZDtoGenerator(),
+    const ZEntityGenerator(),
+    const ZModelGenerator(),
+    const ZtoDtosGenerator(),
+    const ZtoGenerateSchemasGenerator(),
+  ],
+  'zto_generator',
+);
 
 /// Generates a `ZtoSchema` constant for every class annotated with `@Dto()`.
 ///
@@ -50,8 +50,7 @@ class DtoGenerator extends GeneratorForAnnotation<Dto> {
         .map((f) => _buildDescriptorLegacy(f, classElement))
         .join(',\n    ');
 
-    final hasFromMap =
-        classElement.constructors.any((c) => c.name == 'fromMap');
+    final hasFromMap = classElement.constructors.any((c) => c.name == 'fromMap');
 
     final registration = hasFromMap
         ? '''
@@ -71,7 +70,7 @@ const $schemaName = ZtoSchema(
 
   List<FieldElement> _annotatedFields(ClassElement classElement) {
     return classElement.fields
-        .where((f) => f.metadata.any(AnnotationEncoder.isFieldType))
+        .where((f) => f.metadata.annotations.any(AnnotationEncoder.isFieldType))
         .toList();
   }
 
@@ -91,8 +90,7 @@ const $schemaName = ZtoSchema(
     )''';
   }
 
-  void _validateFieldValidatorsLegacy(
-      FieldElement field, ClassElement classElement) {
+  void _validateFieldValidatorsLegacy(FieldElement field, ClassElement classElement) {
     // Delegate to schema_generator validation helper via inline copy
     // to avoid changing the shared function's signature.
     final fieldTypeName = _getZtoFieldTypeName(field);
@@ -101,7 +99,7 @@ const $schemaName = ZtoSchema(
     final allowed = validatorCompatibility[fieldTypeName];
     if (allowed == null) return;
 
-    for (final meta in field.metadata) {
+    for (final meta in field.metadata.annotations) {
       if (!AnnotationEncoder.isValidator(meta)) continue;
       final source = meta.toSource();
       if (!source.startsWith('@')) continue;
@@ -121,7 +119,7 @@ const $schemaName = ZtoSchema(
   }
 
   String _encodeFieldAnnotationLegacy(FieldElement field) {
-    for (final meta in field.metadata) {
+    for (final meta in field.metadata.annotations) {
       if (!AnnotationEncoder.isFieldType(meta)) continue;
       final encoded = AnnotationEncoder.encode(meta);
       if (encoded != null) return encoded;
@@ -133,7 +131,7 @@ const $schemaName = ZtoSchema(
   }
 
   String _encodeValidators(FieldElement field) {
-    return field.metadata
+    return field.metadata.annotations
         .where(AnnotationEncoder.isValidator)
         .map(AnnotationEncoder.encode)
         .whereType<String>()
@@ -144,7 +142,7 @@ const $schemaName = ZtoSchema(
       field.type.nullabilitySuffix == NullabilitySuffix.question;
 
   String? _getZtoFieldTypeName(FieldElement field) {
-    for (final meta in field.metadata) {
+    for (final meta in field.metadata.annotations) {
       if (AnnotationEncoder.isFieldType(meta)) {
         final source = meta.toSource();
         if (!source.startsWith('@')) return null;

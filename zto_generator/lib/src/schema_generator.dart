@@ -11,8 +11,10 @@ import 'validator_compatibility.dart';
 ///
 /// When [includeRegistration] is true, emits a `final _ztoReg...` line for
 /// DTOs with `fromMap`. Set to false when using [Zto.registerSchemas].
-String generateSchemaForClass(ClassElement classElement,
-    {bool includeRegistration = true}) {
+String generateSchemaForClass(
+  ClassElement classElement, {
+  bool includeRegistration = true,
+}) {
   final className = classElement.name;
   final schemaName = '\$${className}Schema';
   final parseType = _getParseType(classElement);
@@ -34,7 +36,7 @@ final _ztoRegType$className = Zto.registerSchema($className, $schemaName);'''
 const $schemaName = ZtoSchema(
   typeName: '$className',
   descriptors: [
-    $descriptors,
+    $descriptors${descriptors.isEmpty ? "" : ","}
   ],
 );$registration''';
 }
@@ -43,7 +45,7 @@ const $schemaName = ZtoSchema(
 
 /// Reads the [ParseType] from the class-level @ZDto / @ZEntity / @ZModel annotation.
 ParseType _getParseType(ClassElement classElement) {
-  for (final meta in classElement.metadata) {
+  for (final meta in classElement.metadata.annotations) {
     final obj = meta.computeConstantValue();
     if (obj == null) continue;
     final typeName = obj.type?.element?.name;
@@ -81,8 +83,10 @@ String _applyParseType(String dartFieldName, ParseType parseType) {
 
 String _toSnakeCase(String s) {
   return s
-      .replaceAllMapped(RegExp(r'(?<=[a-z0-9])([A-Z])'),
-          (m) => '_${m.group(1)!.toLowerCase()}')
+      .replaceAllMapped(
+        RegExp(r'(?<=[a-z0-9])([A-Z])'),
+        (m) => '_${m.group(1)!.toLowerCase()}',
+      )
       .toLowerCase();
 }
 
@@ -96,8 +100,8 @@ String _toPascalCase(String s) {
 /// Determines the JSON map key for [field]:
 /// 1. Explicit `mapKey: '...'` in the annotation source → use it.
 /// 2. Fallback: infer from Dart field name + [parseType].
-String _resolveFieldMapKey(FieldElement field, ParseType parseType) {
-  for (final meta in field.metadata) {
+String _resolveFieldMapKey(VariableElement field, ParseType parseType) {
+  for (final meta in field.metadata.annotations) {
     if (!AnnotationEncoder.isFieldType(meta)) continue;
     final source = meta.toSource().substring(1); // strip '@'
 
@@ -112,7 +116,7 @@ String _resolveFieldMapKey(FieldElement field, ParseType parseType) {
     }
     break;
   }
-  return _applyParseType(field.name, parseType);
+  return _applyParseType(field.displayName, parseType);
 }
 
 /// Rewrites the field annotation source to always include `mapKey: 'key'`
@@ -120,8 +124,8 @@ String _resolveFieldMapKey(FieldElement field, ParseType parseType) {
 /// existing `mapKey:` before injecting the resolved key.
 ///
 /// Special case: `@ZObject(...)` is translated to `ZObj(mapKey: ..., dtoType: TypeName)`.
-String _encodeFieldAnnotationWithKey(FieldElement field, String resolvedKey) {
-  for (final meta in field.metadata) {
+String _encodeFieldAnnotationWithKey(VariableElement field, String resolvedKey) {
+  for (final meta in field.metadata.annotations) {
     if (!AnnotationEncoder.isFieldType(meta)) continue;
     final source = meta.toSource().substring(1); // strip '@'
     final typeName = source.substring(0, source.indexOf('('));
@@ -145,8 +149,7 @@ String _encodeFieldAnnotationWithKey(FieldElement field, String resolvedKey) {
       final dartTypeName = field.type.element?.name ?? 'dynamic';
       final schemaRef = '\$${dartTypeName}Schema';
       final descMatch = RegExp(r"description:\s*'([^']+)'").firstMatch(source);
-      final desc =
-          descMatch != null ? ", description: '${descMatch.group(1)}'" : '';
+      final desc = descMatch != null ? ", description: '${descMatch.group(1)}'" : '';
       return "ZObj(mapKey: '$resolvedKey', dtoSchema: $schemaRef$desc)";
     }
 
@@ -155,10 +158,8 @@ String _encodeFieldAnnotationWithKey(FieldElement field, String resolvedKey) {
       final itemElement = _getListItemElement(field);
       if (itemElement != null && _isDtoAnnotated(itemElement)) {
         final schemaRef = '\$${itemElement.name}Schema';
-        final descMatch =
-            RegExp(r"description:\s*'([^']+)'").firstMatch(source);
-        final desc =
-            descMatch != null ? ", description: '${descMatch.group(1)}'" : '';
+        final descMatch = RegExp(r"description:\s*'([^']+)'").firstMatch(source);
+        final desc = descMatch != null ? ", description: '${descMatch.group(1)}'" : '';
         return "ZListOf(mapKey: '$resolvedKey', dtoSchema: $schemaRef$desc)";
       }
     }
@@ -169,10 +170,8 @@ String _encodeFieldAnnotationWithKey(FieldElement field, String resolvedKey) {
       final itemElement = _getListItemElement(field);
       if (itemElement != null && _isDtoAnnotated(itemElement)) {
         final schemaRef = '\$${itemElement.name}Schema';
-        final descMatch =
-            RegExp(r"description:\s*'([^']+)'").firstMatch(source);
-        final desc =
-            descMatch != null ? ", description: '${descMatch.group(1)}'" : '';
+        final descMatch = RegExp(r"description:\s*'([^']+)'").firstMatch(source);
+        final desc = descMatch != null ? ", description: '${descMatch.group(1)}'" : '';
         return "ZListOf(mapKey: '$resolvedKey', dtoSchema: $schemaRef$desc)";
       }
     }
@@ -231,23 +230,47 @@ String _injectMapKeyIntoSource(String source, String resolvedKey) {
 
 // ── Field collection ───────────────────────────────────────────────────────
 
-List<FieldElement> _annotatedFields(ClassElement classElement) {
-  return classElement.fields.where((f) {
-    // Include fields with explicit @Z* annotation
-    if (f.metadata.any(AnnotationEncoder.isFieldType)) return true;
-    // Include unannotated fields whose type is @ZDto/@ZEntity (infer ZObj)
-    if (_fieldTypeIsDtoAnnotated(f)) return true;
-    // Include unannotated enum fields (infer ZEnum)
-    if (f.type.element is EnumElement) return true;
-    return false;
-  }).toList();
+/// 일반 DTO는 필드에서, Freezed DTO는 단일 생성자의 매개변수에서 정보를 읽습니다.
+List<VariableElement> _annotatedFields(ClassElement classElement) {
+  final isFreezed = classElement.metadata.annotations.any(
+    (annotation) => annotation.computeConstantValue()?.type?.element?.name == 'Freezed',
+  );
+  final List<VariableElement> candidates;
+  if (isFreezed) {
+    final constructors = classElement.constructors
+        .where(
+          (constructor) =>
+              constructor.isFactory &&
+              constructor.name != 'fromJson' &&
+              constructor.name != 'fromMap',
+        )
+        .toList();
+    if (constructors.length != 1) {
+      throw InvalidGenerationSourceError(
+        'Freezed unions are not supported. Use one data factory per DTO.',
+        element: classElement,
+      );
+    }
+    candidates = constructors.single.formalParameters;
+  } else {
+    candidates = classElement.fields;
+  }
+
+  return candidates
+      .where(
+        (field) =>
+            field.metadata.annotations.any(AnnotationEncoder.isFieldType) ||
+            _fieldTypeIsDtoAnnotated(field) ||
+            field.type.element is EnumElement,
+      )
+      .toList();
 }
 
 /// Checks if a field's type is a class annotated with @ZDto or @ZEntity.
-bool _fieldTypeIsDtoAnnotated(FieldElement field) {
+bool _fieldTypeIsDtoAnnotated(VariableElement field) {
   final element = field.type.element;
   if (element is! ClassElement) return false;
-  return element.metadata.any((m) {
+  return element.metadata.annotations.any((m) {
     final obj = m.computeConstantValue();
     final name = obj?.type?.element?.name;
     return name == 'ZDto' || name == 'ZEntity';
@@ -257,7 +280,10 @@ bool _fieldTypeIsDtoAnnotated(FieldElement field) {
 // ── Descriptor generation ──────────────────────────────────────────────────
 
 String _buildDescriptor(
-    FieldElement field, ClassElement classElement, ParseType parseType) {
+  VariableElement field,
+  ClassElement classElement,
+  ParseType parseType,
+) {
   _validateFieldValidators(field, classElement);
   final resolvedKey = _resolveFieldMapKey(field, parseType);
   final fieldAnnotation = _encodeFieldAnnotationWithKey(field, resolvedKey);
@@ -271,14 +297,14 @@ String _buildDescriptor(
     )''';
 }
 
-void _validateFieldValidators(FieldElement field, ClassElement classElement) {
+void _validateFieldValidators(VariableElement field, ClassElement classElement) {
   final fieldTypeName = _getZtoFieldTypeName(field);
   if (fieldTypeName == null) return;
 
   final allowed = validatorCompatibility[fieldTypeName];
   if (allowed == null) return;
 
-  for (final meta in field.metadata) {
+  for (final meta in field.metadata.annotations) {
     if (!AnnotationEncoder.isValidator(meta)) continue;
     final source = meta.toSource();
     if (!source.startsWith('@')) continue;
@@ -298,19 +324,19 @@ void _validateFieldValidators(FieldElement field, ClassElement classElement) {
   }
 }
 
-String _encodeValidators(FieldElement field) {
-  return field.metadata
+String _encodeValidators(VariableElement field) {
+  return field.metadata.annotations
       .where(AnnotationEncoder.isValidator)
       .map(AnnotationEncoder.encode)
       .whereType<String>()
       .join(', ');
 }
 
-bool _hasNullable(FieldElement field) =>
+bool _hasNullable(VariableElement field) =>
     field.type.nullabilitySuffix == NullabilitySuffix.question;
 
-String? _getZtoFieldTypeName(FieldElement field) {
-  for (final meta in field.metadata) {
+String? _getZtoFieldTypeName(VariableElement field) {
+  for (final meta in field.metadata.annotations) {
     if (AnnotationEncoder.isFieldType(meta)) {
       final source = meta.toSource();
       if (!source.startsWith('@')) return null;
@@ -323,7 +349,7 @@ String? _getZtoFieldTypeName(FieldElement field) {
 }
 
 /// Returns the [ClassElement] for the List item type when [field] is `List<T>`.
-ClassElement? _getListItemElement(FieldElement field) {
+ClassElement? _getListItemElement(VariableElement field) {
   final type = field.type;
   if (type is InterfaceType && type.typeArguments.isNotEmpty) {
     final itemElement = type.typeArguments.first.element;
@@ -334,7 +360,7 @@ ClassElement? _getListItemElement(FieldElement field) {
 
 /// Returns true if [element] is annotated with `@ZDto` or `@ZEntity`.
 bool _isDtoAnnotated(ClassElement element) {
-  return element.metadata.any((m) {
+  return element.metadata.annotations.any((m) {
     final obj = m.computeConstantValue();
     final name = obj?.type?.element?.name;
     return name == 'ZDto' || name == 'ZEntity';

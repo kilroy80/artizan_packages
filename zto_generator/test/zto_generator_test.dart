@@ -1,9 +1,7 @@
 import 'dart:convert';
 
 import 'package:build/build.dart';
-import 'package:build_runner_core/build_runner_core.dart';
-import 'package:build_test/build_test.dart'
-    show testBuilder, testBuilders;
+import 'package:build_test/build_test.dart' show testBuilder, testBuilders;
 import 'package:test/test.dart';
 import 'package:zto_generator/zto_generator.dart';
 
@@ -26,10 +24,13 @@ class _DecodedMatcher extends Matcher {
 
   @override
   Description describeMismatch(
-      item, Description mismatchDescription, Map matchState, bool verbose) {
+    item,
+    Description mismatchDescription,
+    Map matchState,
+    bool verbose,
+  ) {
     final decoded = utf8.decode(item as List<int>);
-    return _inner.describeMismatch(
-        decoded, mismatchDescription, matchState, verbose);
+    return _inner.describeMismatch(decoded, mismatchDescription, matchState, verbose);
   }
 }
 
@@ -214,13 +215,12 @@ export 'src/core/zto_exception.dart';
 
 // Inputs shared across all tests
 Map<String, String> _ztoSources() => {
-      'zto|lib/zto.dart': _ztoBarrelStub,
-      'zto|lib/src/annotations/field_annotations.dart': _fieldAnnotationsStub,
-      'zto|lib/src/annotations/validator_annotations.dart':
-          _validatorAnnotationsStub,
-      'zto|lib/src/reflection/field_descriptor.dart': _fieldDescriptorStub,
-      'zto|lib/src/core/zto_exception.dart': _ztoExceptionStub,
-    };
+  'zto|lib/zto.dart': _ztoBarrelStub,
+  'zto|lib/src/annotations/field_annotations.dart': _fieldAnnotationsStub,
+  'zto|lib/src/annotations/validator_annotations.dart': _validatorAnnotationsStub,
+  'zto|lib/src/reflection/field_descriptor.dart': _fieldDescriptorStub,
+  'zto|lib/src/core/zto_exception.dart': _ztoExceptionStub,
+};
 
 // ── Stubs for the new @ZDto / @ZEntity + ParseType API ───────────────────────
 
@@ -371,18 +371,104 @@ class FieldDescriptor {
 ''';
 
 Map<String, String> _zdtoSources() => {
-      'zto|lib/zto.dart': _ztoBarrelStub,
-      'zto|lib/src/annotations/field_annotations.dart':
-          _newFieldAnnotationsStub,
-      'zto|lib/src/annotations/validator_annotations.dart':
-          _validatorAnnotationsStub,
-      'zto|lib/src/reflection/field_descriptor.dart': _newFieldDescriptorStub,
-      'zto|lib/src/core/zto_exception.dart': _ztoExceptionStub,
-    };
+  'zto|lib/zto.dart': _ztoBarrelStub,
+  'zto|lib/src/annotations/field_annotations.dart': _newFieldAnnotationsStub,
+  'zto|lib/src/annotations/validator_annotations.dart': _validatorAnnotationsStub,
+  'zto|lib/src/reflection/field_descriptor.dart': _newFieldDescriptorStub,
+  'zto|lib/src/core/zto_exception.dart': _ztoExceptionStub,
+};
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 void main() {
+  group('Freezed DTO generation', () {
+    final freezedSource = {
+      'freezed_annotation|lib/freezed_annotation.dart':
+          'class Freezed { const Freezed(); } const freezed = Freezed();',
+    };
+
+    test('reads annotated factory parameters and nullable types', () async {
+      await testBuilder(
+        ztoBuilder(BuilderOptions.empty),
+        {
+          ..._zdtoSources(),
+          ...freezedSource,
+          'pkg|lib/freezed_dto.dart': r'''
+import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:zto/zto.dart';
+part 'freezed_dto.g.dart';
+@freezed
+@ZDto(description: 'Freezed DTO')
+abstract class FreezedDto {
+  factory FreezedDto({
+    @ZString(mapKey: 'user_id') @ZMinLength(2) required String id,
+    @ZInt() int? age,
+  }) => throw UnimplementedError();
+}
+''',
+        },
+        outputs: {
+          'pkg|lib/freezed_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains(r'$FreezedDtoSchema'),
+              contains("mapKey: 'user_id'"),
+              contains('ZMinLength(2)'),
+              contains('isNullable: false'),
+              contains("mapKey: 'age'"),
+              contains('isNullable: true'),
+            ]),
+          ),
+        },
+      );
+    });
+
+    test('generates a valid empty descriptor list', () async {
+      await testBuilder(
+        ztoBuilder(BuilderOptions.empty),
+        {
+          ..._zdtoSources(),
+          ...freezedSource,
+          'pkg|lib/empty_dto.dart': r'''
+import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:zto/zto.dart';
+part 'empty_dto.g.dart';
+@freezed
+@ZDto(description: 'Empty DTO')
+abstract class EmptyDto {
+  factory EmptyDto() => throw UnimplementedError();
+}
+''',
+        },
+        outputs: {
+          'pkg|lib/empty_dto.zto_generator.g.part': decodedMatches(
+            contains('descriptors: []'),
+          ),
+        },
+      );
+    });
+
+    test('rejects Freezed unions with an actionable error', () async {
+      final messages = <String>[];
+      final result = await testBuilder(ztoBuilder(BuilderOptions.empty), {
+        ..._zdtoSources(),
+        ...freezedSource,
+        'pkg|lib/union_dto.dart': r'''
+import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:zto/zto.dart';
+part 'union_dto.g.dart';
+@freezed
+@ZDto(description: 'Union DTO')
+abstract class UnionDto {
+  factory UnionDto.ok(@ZString() String value) => throw UnimplementedError();
+  factory UnionDto.error(@ZString() String message) => throw UnimplementedError();
+}
+''',
+      }, onLog: (record) => messages.add(record.message));
+      expect(result.succeeded, isFalse);
+      expect(messages.join('\n'), contains('Freezed unions are not supported'));
+    });
+  });
+
   group('ZtoGenerator', () {
     group('simple DTO with primitive fields', () {
       test('generates ZtoSchema const for a simple DTO', () async {
@@ -410,24 +496,24 @@ class CreateUserDto with ZtoDto<CreateUserDto> {
 ''',
           },
           outputs: {
-            'pkg|lib/create_user_dto.g.dart': decodedMatches(allOf([
-              contains(r'const $CreateUserDtoSchema = ZtoSchema('),
-              contains("typeName: 'CreateUserDto'"),
-              contains("ZString('name')"),
-              contains('ZMinLength(2)'),
-              contains('isNullable: false'),
-              contains("ZInt('age')"),
-              contains('ZMin(18)'),
-            ])),
+            'pkg|lib/create_user_dto.zto_generator.g.part': decodedMatches(
+              allOf([
+                contains(r'const $CreateUserDtoSchema = ZtoSchema('),
+                contains("typeName: 'CreateUserDto'"),
+                contains("ZString('name')"),
+                contains('ZMinLength(2)'),
+                contains('isNullable: false'),
+                contains("ZInt('age')"),
+                contains('ZMin(18)'),
+              ]),
+            ),
           },
         );
       });
     });
 
     group('UserDto inheritance (Create vs Update)', () {
-      test(
-          'generates UserDtoCreate with isNullable: false and UserDtoUpdate with isNullable: true',
-          () async {
+      test('generates UserDtoCreate with isNullable: false and UserDtoUpdate with isNullable: true', () async {
         await testBuilder(
           ztoBuilder(BuilderOptions.empty),
           {
@@ -463,18 +549,20 @@ class UserDtoUpdate extends UserDto with ZtoDto<UserDtoUpdate> {
 ''',
           },
           outputs: {
-            'pkg|lib/user_dto.g.dart': decodedMatches(allOf([
-              contains(r'$UserDtoCreateSchema'),
-              contains(r'$UserDtoUpdateSchema'),
-              contains("typeName: 'UserDtoCreate'"),
-              contains("typeName: 'UserDtoUpdate'"),
-              contains("ZString('name')"),
-              contains("ZString('email')"),
-              // UserDtoCreate: all isNullable: false
-              contains('UserDtoCreateSchema'),
-              // UserDtoUpdate: all isNullable: true
-              contains('isNullable: true'),
-            ])),
+            'pkg|lib/user_dto.zto_generator.g.part': decodedMatches(
+              allOf([
+                contains(r'$UserDtoCreateSchema'),
+                contains(r'$UserDtoUpdateSchema'),
+                contains("typeName: 'UserDtoCreate'"),
+                contains("typeName: 'UserDtoUpdate'"),
+                contains("ZString('name')"),
+                contains("ZString('email')"),
+                // UserDtoCreate: all isNullable: false
+                contains('UserDtoCreateSchema'),
+                // UserDtoUpdate: all isNullable: true
+                contains('isNullable: true'),
+              ]),
+            ),
           },
         );
       });
@@ -504,10 +592,12 @@ class ProfileDto {
 ''',
           },
           outputs: {
-            'pkg|lib/profile_dto.g.dart': decodedMatches(allOf([
-              contains('isNullable: true'),
-              contains('isNullable: false'),
-            ])),
+            'pkg|lib/profile_dto.zto_generator.g.part': decodedMatches(
+              allOf([
+                contains('isNullable: true'),
+                contains('isNullable: false'),
+              ]),
+            ),
           },
         );
       });
@@ -534,9 +624,11 @@ class ProductDto {
 ''',
           },
           outputs: {
-            'pkg|lib/product_dto.g.dart': decodedMatches(allOf([
-              contains("ZEnum('category', values: ['food', 'electronics'])"),
-            ])),
+            'pkg|lib/product_dto.zto_generator.g.part': decodedMatches(
+              allOf([
+                contains("ZEnum('category', values: ['food', 'electronics'])"),
+              ]),
+            ),
           },
         );
       });
@@ -563,17 +655,18 @@ class TagsDto {
 ''',
           },
           outputs: {
-            'pkg|lib/tags_dto.g.dart': decodedMatches(allOf([
-              contains("ZList('tags', itemType: ZString)"),
-            ])),
+            'pkg|lib/tags_dto.zto_generator.g.part': decodedMatches(
+              allOf([
+                contains("ZList('tags', itemType: ZString)"),
+              ]),
+            ),
           },
         );
       });
     });
 
     group('DTO with description and example on field', () {
-      test('generates annotation with description and example params',
-          () async {
+      test('generates annotation with description and example params', () async {
         await testBuilder(
           ztoBuilder(BuilderOptions.empty),
           {
@@ -593,18 +686,19 @@ class OrderDto {
 ''',
           },
           outputs: {
-            'pkg|lib/order_dto.g.dart': decodedMatches(allOf([
-              contains("description: 'Order title'"),
-              contains("example: 'Widget order'"),
-            ])),
+            'pkg|lib/order_dto.zto_generator.g.part': decodedMatches(
+              allOf([
+                contains("description: 'Order title'"),
+                contains("example: 'Widget order'"),
+              ]),
+            ),
           },
         );
       });
     });
 
     group('invalid validator on field type', () {
-      test('fails build with clear error when @ZEmail is used on @ZDouble',
-          () async {
+      test('fails build with clear error when @ZEmail is used on @ZDouble', () async {
         final result = await testBuilder(
           ztoBuilder(BuilderOptions.empty),
           {
@@ -626,8 +720,8 @@ class InvalidDto {
           },
         );
         expect(
-          result.buildResult.status,
-          BuildStatus.failure,
+          result.succeeded,
+          isFalse,
           reason: 'Build should fail for invalid validator',
         );
         // Use onLog to capture the error message in a real scenario - we just verify
@@ -681,17 +775,18 @@ class UserResponseDto {
 ''',
         },
         outputs: {
-          'pkg|lib/user_dto.g.dart': decodedMatches(allOf([
-            contains("mapKey: 'userId'"),
-            contains("mapKey: 'createdAt'"),
-            contains("mapKey: 'lastName'"),
-          ])),
+          'pkg|lib/user_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("mapKey: 'userId'"),
+              contains("mapKey: 'createdAt'"),
+              contains("mapKey: 'lastName'"),
+            ]),
+          ),
         },
       );
     });
 
-    test('snakeCase: camelCase field names converted to snake_case mapKeys',
-        () async {
+    test('snakeCase: camelCase field names converted to snake_case mapKeys', () async {
       await testBuilder(
         ztoBuilder(BuilderOptions.empty),
         {
@@ -725,12 +820,14 @@ class UserResponseDto {
 ''',
         },
         outputs: {
-          'pkg|lib/user_dto.g.dart': decodedMatches(allOf([
-            contains("mapKey: 'user_id'"),
-            contains("mapKey: 'created_at'"),
-            contains("mapKey: 'last_login_date'"),
-            contains("mapKey: 'name'"),
-          ])),
+          'pkg|lib/user_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("mapKey: 'user_id'"),
+              contains("mapKey: 'created_at'"),
+              contains("mapKey: 'last_login_date'"),
+              contains("mapKey: 'name'"),
+            ]),
+          ),
         },
       );
     });
@@ -761,17 +858,18 @@ class UserDto {
 ''',
         },
         outputs: {
-          'pkg|lib/user_dto.g.dart': decodedMatches(allOf([
-            contains("mapKey: 'UserName'"),
-            contains("mapKey: 'Email'"),
-            contains("mapKey: 'CreatedAt'"),
-          ])),
+          'pkg|lib/user_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("mapKey: 'UserName'"),
+              contains("mapKey: 'Email'"),
+              contains("mapKey: 'CreatedAt'"),
+            ]),
+          ),
         },
       );
     });
 
-    test('kebabCase: camelCase field names converted to kebab-case mapKeys',
-        () async {
+    test('kebabCase: camelCase field names converted to kebab-case mapKeys', () async {
       await testBuilder(
         ztoBuilder(BuilderOptions.empty),
         {
@@ -797,17 +895,18 @@ class UserDto {
 ''',
         },
         outputs: {
-          'pkg|lib/user_dto.g.dart': decodedMatches(allOf([
-            contains("mapKey: 'first-name'"),
-            contains("mapKey: 'last-login-date'"),
-            contains("mapKey: 'id'"),
-          ])),
+          'pkg|lib/user_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("mapKey: 'first-name'"),
+              contains("mapKey: 'last-login-date'"),
+              contains("mapKey: 'id'"),
+            ]),
+          ),
         },
       );
     });
 
-    test('explicit mapKey on annotation overrides ParseType inference',
-        () async {
+    test('explicit mapKey on annotation overrides ParseType inference', () async {
       await testBuilder(
         ztoBuilder(BuilderOptions.empty),
         {
@@ -830,18 +929,19 @@ class UserDto {
 ''',
         },
         outputs: {
-          'pkg|lib/user_dto.g.dart': decodedMatches(allOf([
-            contains("mapKey: 'custom_key'"),
-            contains("mapKey: 'created_at'"),
-          ])),
+          'pkg|lib/user_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("mapKey: 'custom_key'"),
+              contains("mapKey: 'created_at'"),
+            ]),
+          ),
         },
       );
     });
   });
 
   group('@ZModel', () {
-    test('gera \$XModelSchema (ZtoSchema) para uma classe anotada com @ZModel',
-        () async {
+    test('gera \$XModelSchema (ZtoSchema) para uma classe anotada com @ZModel', () async {
       await testBuilder(
         ztoBuilder(BuilderOptions.empty),
         {
@@ -867,25 +967,27 @@ class UserModel {
 ''',
         },
         outputs: {
-          'pkg|lib/user_model.g.dart': decodedMatches(allOf([
-            contains(r'const $UserModelSchema = ZtoSchema('),
-            contains("typeName: 'UserModel'"),
-            contains("mapKey: 'userId'"),
-            contains("mapKey: 'createdAt'"),
-            contains("mapKey: 'lastName'"),
-            contains('isNullable: true'),
-            contains('isNullable: false'),
-          ])),
+          'pkg|lib/user_model.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains(r'const $UserModelSchema = ZtoSchema('),
+              contains("typeName: 'UserModel'"),
+              contains("mapKey: 'userId'"),
+              contains("mapKey: 'createdAt'"),
+              contains("mapKey: 'lastName'"),
+              contains('isNullable: true'),
+              contains('isNullable: false'),
+            ]),
+          ),
         },
       );
     });
 
     test(
-        'schema gerado por @ZModel é idêntico ao gerado por @ZEntity para a mesma classe',
-        () async {
-      // Ambas as anotações delegam a generateSchemaForClass, logo produzem o
-      // mesmo ZtoSchema (typeName + descriptors) para a mesma classe.
-      const modelSource = r'''
+      'schema gerado por @ZModel é idêntico ao gerado por @ZEntity para a mesma classe',
+      () async {
+        // Ambas as anotações delegam a generateSchemaForClass, logo produzem o
+        // mesmo ZtoSchema (typeName + descriptors) para a mesma classe.
+        const modelSource = r'''
 import 'package:zto/zto.dart';
 
 part 'sample.g.dart';
@@ -902,7 +1004,7 @@ class Sample {
 }
 ''';
 
-      const entitySource = r'''
+        const entitySource = r'''
 import 'package:zto/zto.dart';
 
 part 'sample.g.dart';
@@ -919,39 +1021,44 @@ class Sample {
 }
 ''';
 
-      final commonMatchers = allOf([
-        contains(r'const $SampleSchema = ZtoSchema('),
-        contains("typeName: 'Sample'"),
-        contains("mapKey: 'name'"),
-        contains("description: 'The name'"),
-        contains("mapKey: 'age'"),
-        contains('isNullable: true'),
-        contains('isNullable: false'),
-      ]);
+        final commonMatchers = allOf([
+          contains(r'const $SampleSchema = ZtoSchema('),
+          contains("typeName: 'Sample'"),
+          contains("mapKey: 'name'"),
+          contains("description: 'The name'"),
+          contains("mapKey: 'age'"),
+          contains('isNullable: true'),
+          contains('isNullable: false'),
+        ]);
 
-      await testBuilder(
-        ztoBuilder(BuilderOptions.empty),
-        {..._zdtoSources(), 'pkg|lib/sample.dart': modelSource},
-        outputs: {'pkg|lib/sample.g.dart': decodedMatches(commonMatchers)},
-      );
+        await testBuilder(
+          ztoBuilder(BuilderOptions.empty),
+          {..._zdtoSources(), 'pkg|lib/sample.dart': modelSource},
+          outputs: {
+            'pkg|lib/sample.zto_generator.g.part': decodedMatches(commonMatchers),
+          },
+        );
 
-      await testBuilder(
-        ztoBuilder(BuilderOptions.empty),
-        {..._zdtoSources(), 'pkg|lib/sample.dart': entitySource},
-        outputs: {'pkg|lib/sample.g.dart': decodedMatches(commonMatchers)},
-      );
-    });
+        await testBuilder(
+          ztoBuilder(BuilderOptions.empty),
+          {..._zdtoSources(), 'pkg|lib/sample.dart': entitySource},
+          outputs: {
+            'pkg|lib/sample.zto_generator.g.part': decodedMatches(commonMatchers),
+          },
+        );
+      },
+    );
 
     test(
-        '@ZModel com ParseType.snakeCase converte camelCase em snake_case nos mapKeys',
-        () async {
-      // Espelho de tabela usa colunas snake_case: garante que @ZModel honra o
-      // parseType exatamente como @ZEntity/@ZDto (trava o fix em _getParseType).
-      await testBuilder(
-        ztoBuilder(BuilderOptions.empty),
-        {
-          ..._zdtoSources(),
-          'pkg|lib/product_model.dart': r'''
+      '@ZModel com ParseType.snakeCase converte camelCase em snake_case nos mapKeys',
+      () async {
+        // Espelho de tabela usa colunas snake_case: garante que @ZModel honra o
+        // parseType exatamente como @ZEntity/@ZDto (trava o fix em _getParseType).
+        await testBuilder(
+          ztoBuilder(BuilderOptions.empty),
+          {
+            ..._zdtoSources(),
+            'pkg|lib/product_model.dart': r'''
 import 'package:zto/zto.dart';
 
 part 'product_model.g.dart';
@@ -967,22 +1074,25 @@ class ProductModel {
   const ProductModel({required this.establishmentId, required this.createdAt});
 }
 ''',
-        },
-        outputs: {
-          'pkg|lib/product_model.g.dart': decodedMatches(allOf([
-            contains(r'const $ProductModelSchema = ZtoSchema('),
-            contains("mapKey: 'establishment_id'"),
-            contains("mapKey: 'created_at'"),
-            isNot(contains("mapKey: 'establishmentId'")),
-            isNot(contains("mapKey: 'createdAt'")),
-          ])),
-        },
-      );
-    });
+          },
+          outputs: {
+            'pkg|lib/product_model.zto_generator.g.part': decodedMatches(
+              allOf([
+                contains(r'const $ProductModelSchema = ZtoSchema('),
+                contains("mapKey: 'establishment_id'"),
+                contains("mapKey: 'created_at'"),
+                isNot(contains("mapKey: 'establishmentId'")),
+                isNot(contains("mapKey: 'createdAt'")),
+              ]),
+            ),
+          },
+        );
+      },
+    );
   });
 
   group('@ZObject', () {
-    test('translates to ZObj with inferred dtoType from field type', () async {
+    test('translates to ZObj with a direct nested schema reference', () async {
       await testBuilder(
         ztoBuilder(BuilderOptions.empty),
         {
@@ -1007,10 +1117,16 @@ class OrderDto {
 ''',
         },
         outputs: {
-          'pkg|lib/order_dto.g.dart': decodedMatches(allOf([
-            contains("ZObj(mapKey: 'address', dtoType: AddressDto)"),
-            contains("mapKey: 'id'"),
-          ])),
+          'pkg|lib/order_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains(
+                RegExp(
+                  r"ZObj\(\s*mapKey: 'address',\s*dtoSchema: \$AddressDtoSchema,?\s*\)",
+                ),
+              ),
+              contains("mapKey: 'id'"),
+            ]),
+          ),
         },
       );
     });
@@ -1038,11 +1154,13 @@ class OrderDto {
         },
         outputs: {
           // dart_style may break long constructors across lines — check parts independently.
-          'pkg|lib/order_dto.g.dart': decodedMatches(allOf([
-            contains("mapKey: 'shippingAddress'"),
-            contains('dtoType: AddressDto'),
-            contains("description: 'Shipping address'"),
-          ])),
+          'pkg|lib/order_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("mapKey: 'shippingAddress'"),
+              contains('dtoSchema: \$AddressDtoSchema'),
+              contains("description: 'Shipping address'"),
+            ]),
+          ),
         },
       );
     });
@@ -1069,8 +1187,12 @@ class OrderDto {
 ''',
         },
         outputs: {
-          'pkg|lib/order_dto.g.dart': decodedMatches(
-            contains("ZObj(mapKey: 'billing', dtoType: AddressDto)"),
+          'pkg|lib/order_dto.zto_generator.g.part': decodedMatches(
+            contains(
+              RegExp(
+                r"ZObj\(\s*mapKey: 'billing',\s*dtoSchema: \$AddressDtoSchema,?\s*\)",
+              ),
+            ),
           ),
         },
       );
@@ -1101,11 +1223,17 @@ class OrderDto {
 ''',
         },
         outputs: {
-          'pkg|lib/order_dto.g.dart': decodedMatches(allOf([
-            contains("ZObj(mapKey: 'billing_address', dtoType: AddressDto)"),
-            contains("mapKey: 'delivery_address'"),
-            contains("description: 'Where to deliver'"),
-          ])),
+          'pkg|lib/order_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains(
+                RegExp(
+                  r"ZObj\(\s*mapKey: 'billing_address',\s*dtoSchema: \$AddressDtoSchema,?\s*\)",
+                ),
+              ),
+              contains("mapKey: 'delivery_address'"),
+              contains("description: 'Where to deliver'"),
+            ]),
+          ),
         },
       );
     });
@@ -1135,13 +1263,23 @@ class OrderDto {
 ''',
         },
         outputs: {
-          'pkg|lib/order_dto.g.dart': decodedMatches(allOf([
-            contains("ZObj(mapKey: 'address', dtoType: AddressDto)"),
-            contains("ZObj(mapKey: 'billingAddress', dtoType: AddressDto)"),
-            // address is nullable, billingAddress is not
-            contains('isNullable: true'),
-            contains('isNullable: false'),
-          ])),
+          'pkg|lib/order_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains(
+                RegExp(
+                  r"ZObj\(\s*mapKey: 'address',\s*dtoSchema: \$AddressDtoSchema,?\s*\)",
+                ),
+              ),
+              contains(
+                RegExp(
+                  r"ZObj\(\s*mapKey: 'billingAddress',\s*dtoSchema: \$AddressDtoSchema,?\s*\)",
+                ),
+              ),
+              // address is nullable, billingAddress is not
+              contains('isNullable: true'),
+              contains('isNullable: false'),
+            ]),
+          ),
         },
       );
     });
@@ -1171,14 +1309,16 @@ class PostDto {
 ''',
         },
         outputs: {
-          'pkg|lib/post_dto.g.dart': decodedMatches(allOf([
-            // Short call stays on one line.
-            contains("ZList(mapKey: 'tags', itemType: ZString)"),
-            // Long call may be split by dart_style — check parts independently.
-            contains("mapKey: 'scoreHistory'"),
-            contains('itemType: ZInt'),
-            contains("description: 'Score history'"),
-          ])),
+          'pkg|lib/post_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              // Short call stays on one line.
+              contains("ZList(mapKey: 'tags', itemType: ZString)"),
+              // Long call may be split by dart_style — check parts independently.
+              contains("mapKey: 'scoreHistory'"),
+              contains('itemType: ZInt'),
+              contains("description: 'Score history'"),
+            ]),
+          ),
         },
       );
     });
@@ -1203,11 +1343,13 @@ class TeamDto {
 ''',
         },
         outputs: {
-          'pkg|lib/team_dto.g.dart': decodedMatches(allOf([
-            contains("mapKey: 'members'"),
-            contains('itemType: ZObj'),
-            contains("description: 'Team members'"),
-          ])),
+          'pkg|lib/team_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("mapKey: 'members'"),
+              contains('itemType: ZObj'),
+              contains("description: 'Team members'"),
+            ]),
+          ),
         },
       );
     });
@@ -1235,11 +1377,13 @@ class TeamDto {
 ''',
         },
         outputs: {
-          'pkg|lib/team_dto.g.dart': decodedMatches(allOf([
-            contains("ZList(mapKey: 'active_members', itemType: ZObj)"),
-            contains("mapKey: 'allowed_domains'"),
-            contains("description: 'Allowed domains'"),
-          ])),
+          'pkg|lib/team_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("ZList(mapKey: 'active_members', itemType: ZObj)"),
+              contains("mapKey: 'allowed_domains'"),
+              contains("description: 'Allowed domains'"),
+            ]),
+          ),
         },
       );
     });
@@ -1267,10 +1411,12 @@ class TeamDto {
 ''',
         },
         outputs: {
-          'pkg|lib/team_dto.g.dart': decodedMatches(allOf([
-            contains("ZList(mapKey: 'custom_list', itemType: ZString)"),
-            contains("ZList(mapKey: 'other_items', itemType: ZString)"),
-          ])),
+          'pkg|lib/team_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("ZList(mapKey: 'custom_list', itemType: ZString)"),
+              contains("ZList(mapKey: 'other_items', itemType: ZString)"),
+            ]),
+          ),
         },
       );
     });
@@ -1298,12 +1444,14 @@ class PostDto {
 ''',
         },
         outputs: {
-          'pkg|lib/post_dto.g.dart': decodedMatches(allOf([
-            contains("ZList(mapKey: 'tags', itemType: ZString)"),
-            contains("ZList(mapKey: 'scores', itemType: ZInt)"),
-            contains('isNullable: true'),
-            contains('isNullable: false'),
-          ])),
+          'pkg|lib/post_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("ZList(mapKey: 'tags', itemType: ZString)"),
+              contains("ZList(mapKey: 'scores', itemType: ZInt)"),
+              contains('isNullable: true'),
+              contains('isNullable: false'),
+            ]),
+          ),
         },
       );
     });
@@ -1346,15 +1494,17 @@ class TeamDto {
 ''',
         },
         outputs: {
-          'pkg|lib/member_dto.g.dart': decodedMatches(
+          'pkg|lib/member_dto.zto_generator.g.part': decodedMatches(
             contains(r'$MemberDtoSchema'),
           ),
-          'pkg|lib/team_dto.g.dart': decodedMatches(allOf([
-            contains("mapKey: 'members'"),
-            contains("mapKey: 'formerMembers'"),
-            contains(r'dtoSchema: $MemberDtoSchema'),
-            contains("description: 'Former members'"),
-          ])),
+          'pkg|lib/team_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("mapKey: 'members'"),
+              contains("mapKey: 'formerMembers'"),
+              contains(r'dtoSchema: $MemberDtoSchema'),
+              contains("description: 'Former members'"),
+            ]),
+          ),
         },
       );
     });
@@ -1397,23 +1547,24 @@ class TeamDto {
 ''',
         },
         outputs: {
-          'pkg|lib/member_dto.g.dart': decodedMatches(
+          'pkg|lib/member_dto.zto_generator.g.part': decodedMatches(
             contains(r'$MemberDtoSchema'),
           ),
-          'pkg|lib/team_dto.g.dart': decodedMatches(allOf([
-            contains("mapKey: 'active_members'"),
-            contains("mapKey: 'former_members'"),
-            contains(r'dtoSchema: $MemberDtoSchema'),
-            contains("description: 'Past members'"),
-          ])),
+          'pkg|lib/team_dto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains("mapKey: 'active_members'"),
+              contains("mapKey: 'former_members'"),
+              contains(r'dtoSchema: $MemberDtoSchema'),
+              contains("description: 'Past members'"),
+            ]),
+          ),
         },
       );
     });
   });
 
   group('ZtoDtosGenerator', () {
-    test(r'generates $ZtoSchemas from @ZtoDtos with DTOs that have fromMap',
-        () async {
+    test(r'generates $ZtoSchemas from @ZtoDtos with DTOs that have fromMap', () async {
       await testBuilders(
         [ztoBuilder(BuilderOptions.empty)],
         {
@@ -1455,25 +1606,28 @@ class UpdateUserDto with ZtoDto<UpdateUserDto> {
 ''',
         },
         outputs: {
-          'pkg|lib/dtos/user_dto.g.dart':
-              decodedMatches(contains('CreateUserDto')),
-          'pkg|lib/dtos/zto.g.dart': decodedMatches(allOf([
-            contains(r'const List<ZtoSchemaRegistration> $ZtoSchemas = ['),
-            contains('(CreateUserDto, \$CreateUserDtoSchema)'),
-            contains('(UpdateUserDto, \$UpdateUserDtoSchema)'),
-          ])),
+          'pkg|lib/dtos/user_dto.zto_generator.g.part': decodedMatches(
+            contains('CreateUserDto'),
+          ),
+          'pkg|lib/dtos/zto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains(r'const List<ZtoSchemaRegistration> $ZtoSchemas = ['),
+              contains('(CreateUserDto, \$CreateUserDtoSchema)'),
+              contains('(UpdateUserDto, \$UpdateUserDtoSchema)'),
+            ]),
+          ),
         },
       );
     });
 
     test(
-        r'excludes DTOs without fromMap from $ZtoSchemas but generates all schemas',
-        () async {
-      await testBuilders(
-        [ztoBuilder(BuilderOptions.empty)],
-        {
-          ..._ztoSources(),
-          'pkg|lib/dtos/zto.dart': r'''
+      r'excludes DTOs without fromMap from $ZtoSchemas but generates all schemas',
+      () async {
+        await testBuilders(
+          [ztoBuilder(BuilderOptions.empty)],
+          {
+            ..._ztoSources(),
+            'pkg|lib/dtos/zto.dart': r'''
 import 'package:pkg/dtos/create_dto.dart';
 import 'package:zto/zto.dart';
 
@@ -1482,7 +1636,7 @@ part 'zto.g.dart';
 @ZtoDtos(dtos: [CreateDto, ResponseDto])
 const _ztoDtos = null;
 ''',
-          'pkg|lib/dtos/create_dto.dart': r'''
+            'pkg|lib/dtos/create_dto.dart': r'''
 import 'package:zto/zto.dart';
 
 part 'create_dto.g.dart';
@@ -1501,22 +1655,25 @@ class ResponseDto {
   const ResponseDto({required this.id});
 }
 ''',
-        },
-        outputs: {
-          'pkg|lib/dtos/create_dto.g.dart':
-              decodedMatches(contains('CreateDto')),
-          'pkg|lib/dtos/zto.g.dart': decodedMatches(allOf([
-            contains(r'$CreateDtoSchema'),
-            contains(r'$ResponseDtoSchema'),
-            contains('(CreateDto, \$CreateDtoSchema)'),
-            contains('(ResponseDto, \$ResponseDtoSchema)'),
-          ])),
-        },
-      );
-    });
+          },
+          outputs: {
+            'pkg|lib/dtos/create_dto.zto_generator.g.part': decodedMatches(
+              contains('CreateDto'),
+            ),
+            'pkg|lib/dtos/zto.zto_generator.g.part': decodedMatches(
+              allOf([
+                contains(r'$CreateDtoSchema'),
+                contains(r'$ResponseDtoSchema'),
+                contains('(CreateDto, \$CreateDtoSchema)'),
+                contains('(ResponseDto, \$ResponseDtoSchema)'),
+              ]),
+            ),
+          },
+        );
+      },
+    );
 
-    test(r'generates schemas with empty $ZtoSchemas when no DTOs have fromMap',
-        () async {
+    test(r'generates schemas with empty $ZtoSchemas when no DTOs have fromMap', () async {
       await testBuilders(
         [ztoBuilder(BuilderOptions.empty)],
         {
@@ -1543,12 +1700,15 @@ class UserResponseDto {
 ''',
         },
         outputs: {
-          'pkg|lib/dtos/response_dto.g.dart':
-              decodedMatches(contains('UserResponseDto')),
-          'pkg|lib/dtos/zto.g.dart': decodedMatches(allOf([
-            contains(r'$UserResponseDtoSchema'),
-            contains('(UserResponseDto, \$UserResponseDtoSchema)'),
-          ])),
+          'pkg|lib/dtos/response_dto.zto_generator.g.part': decodedMatches(
+            contains('UserResponseDto'),
+          ),
+          'pkg|lib/dtos/zto.zto_generator.g.part': decodedMatches(
+            allOf([
+              contains(r'$UserResponseDtoSchema'),
+              contains('(UserResponseDto, \$UserResponseDtoSchema)'),
+            ]),
+          ),
         },
       );
     });
